@@ -5,7 +5,7 @@
 
   const W = window.WORDS || [];
   const N = W.length;
-  const H = 0, P = 1, EN = 2, XH = 3, XP = 4, XE = 5, NOTE = 6;
+  const H = 0, P = 1, EN = 2, XH = 3, XP = 4, XE = 5, NOTE = 6, GL = 7;
 
   // ---------------------------------------------------------------- helpers
   const $ = (s, r = document) => r.querySelector(s);
@@ -61,6 +61,45 @@
   function pyColored(marked) {
     return tokens(marked).map((t) => (t.s ? `<span class="t${t.t}">${esc(t.s)}</span>` : esc(t.sep))).join('');
   }
+
+  // Example sentence: each pinyin word is a hover/tap target carrying its English gloss.
+  function pyWords(marked, gl) {
+    let k = 0;
+    return marked.replace(/[A-Za-zÀ-ɏ|'\-]+|[^A-Za-zÀ-ɏ|'\-]+/g, (seg) => {
+      if (!/[A-Za-zÀ-ɏ]/.test(seg)) return esc(seg);
+      const g = gl ? gl[k++] : '';
+      const inner = seg.split(/(\||'|-)/).map((x) =>
+        x === '|' || !x ? '' : x === "'" ? '’' : x === '-' ? '-' : `<span class="t${toneOf(x)}">${esc(x)}</span>`).join('');
+      return g ? `<span class="w" tabindex="0" data-g="${esc(g)}">${inner}</span>` : inner;
+    });
+  }
+
+  const tip = document.createElement('div');
+  tip.className = 'tip'; tip.id = 'tip'; tip.setAttribute('role', 'tooltip'); tip.hidden = true;
+  let tipFor = null;
+  function showTip(w) {
+    if (tipFor && tipFor !== w) tipFor.classList.remove('on');
+    tipFor = w;
+    tip.textContent = smart(w.dataset.g);
+    tip.hidden = false;
+    w.classList.add('on');
+    w.setAttribute('aria-describedby', 'tip');
+    const r = w.getBoundingClientRect();
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const x = Math.max(8, Math.min(r.left + r.width / 2 - tw / 2, innerWidth - tw - 8));
+    let y = r.top - th - 8;
+    if (y < 8) y = r.bottom + 8;
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  }
+  function hideTip() {
+    if (tipFor) { tipFor.classList.remove('on'); tipFor.removeAttribute('aria-describedby'); }
+    tipFor = null; tip.hidden = true;
+  }
+  document.addEventListener('pointerover', (e) => { if (e.pointerType === 'mouse') { const w = e.target.closest('.w'); if (w) showTip(w); } });
+  document.addEventListener('pointerout', (e) => { if (e.pointerType === 'mouse') { const w = e.target.closest('.w'); if (w && !w.contains(e.relatedTarget)) hideTip(); } });
+  document.addEventListener('focusin', (e) => { const w = e.target.closest && e.target.closest('.w'); if (w) showTip(w); });
+  document.addEventListener('focusout', (e) => { if (e.target.closest && e.target.closest('.w')) hideTip(); });
+  window.addEventListener('scroll', hideTip, { passive: true });
 
   function rich(text) {
     let s = smart(text);
@@ -293,6 +332,7 @@
       if (/xiaoxiao|yunxi|xiaoyi|tingting|ting-ting|lili|yu-shu/i.test(v.name)) s += 4;
       if (/google/i.test(v.name)) s += 3;
       if (v.localService) s += 1;
+      if (/^(eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley)\b/i.test(v.name)) s -= 15; // macOS novelty voices, often silent in Chrome
       return s;
     },
     pick() {
@@ -308,6 +348,8 @@
         u.rate = rate || +S.settings.rate || 0.9;
         u.onstart = () => onstart && onstart();
         u.onend = u.onerror = () => onend && onend();
+        this.u = u; // keep a reference so Chrome doesn't garbage-collect it mid-sentence
+        if (speechSynthesis.resume) speechSynthesis.resume(); // Chrome can get stuck 'paused' after the tab sleeps
         speechSynthesis.speak(u);
       };
       if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); setTimeout(go, 60); }
@@ -484,6 +526,7 @@
 
   function renderStudy(fresh = false) {
     const root = $('#view-study');
+    hideTip();
     clearTimeout(sess.waitT);
     const now = Date.now();
     if (sess.cur == null || (sess.mode !== 'intro' && !S.cards[sess.cur])) {
@@ -534,7 +577,7 @@
         </div>
         <div class="inuse">
           <div class="example">
-            <p class="ex-py" lang="zh-Latn">${pyColored(w[XP])}</p>
+            <p class="ex-py" lang="zh-Latn">${pyWords(w[XP], w[GL])}</p>
             <button class="play" data-act="play-ex" aria-label="Play the example">${ICON_PLAY}</button>
             <p class="ex-en">${esc(smart(w[XE]))}</p>
           </div>
@@ -683,7 +726,7 @@
     d.className = 'wdetail';
     d.innerHTML = `<div>${staffHTML(w[P])}</div>
       <div class="example">
-        <p class="ex-py" lang="zh-Latn">${pyColored(w[XP])}</p>
+        <p class="ex-py" lang="zh-Latn">${pyWords(w[XP], w[GL])}</p>
         <button class="play" data-act="say-x" data-i="${i}" aria-label="Play the example">${ICON_PLAY}</button>
         <p class="ex-en">${esc(smart(w[XE]))}</p>
       </div>
@@ -772,7 +815,7 @@
       <section class="group" aria-labelledby="s-about">
         <h2 id="s-about">About the word list</h2>
         <p>The 1000 words come from SUBTLEX-CH, a frequency count of 33.5 million words of Mandarin film and TV subtitles (Cai &amp; Brysbaert, 2010), which tracks everyday speech better than counts based on books or news. Because subtitles skew toward crime dramas, words like “corpse” and “vampire” were cut, along with name fragments and slurs, and a few essentials subtitles undercount (numbers, “hello,” “how much is it”) were added. Pinyin, glosses and examples were written for this app and checked against a pinyin dictionary.</p>
-        <p class="fineprint">Keyboard: Space flips and grades Good, 1 to 4 grade, R replays the word, E plays the example, H shows a hint. Fonts: Gentium Book Plus and Andika by SIL International, under the SIL Open Font License.</p>
+        <p class="fineprint">Hover over (or tap) a word in an example sentence to see what it means. Keyboard: Space flips and grades Good, 1 to 4 grade, R replays the word, E plays the example, H shows a hint. Fonts: Gentium Book Plus and Andika by SIL International, under the SIL Open Font License.</p>
       </section>`;
     drawAll($('#view-settings'));
   }
@@ -830,6 +873,9 @@
 
   // ---------------------------------------------------------------- events
   document.addEventListener('click', (e) => {
+    const word = e.target.closest('.w');
+    if (word) { showTip(word); return; }
+    hideTip();
     const dot = e.target.closest('.field i');
     if (dot) {
       peekIdx = +dot.dataset.i;
@@ -907,6 +953,7 @@
   // ---------------------------------------------------------------- boot
   function boot() {
     if (!N) { document.body.innerHTML = '<p class="noscript">The word list (words.js) didn’t load.</p>'; return; }
+    document.body.appendChild(tip);
     applyDisplay();
     $('.staff-mark').outerHTML = staffHTML($('.staff-mark').dataset.py, 'staff-mark');
     TTS.init();

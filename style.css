@@ -315,7 +315,7 @@ main { max-width: 980px; margin: 0 auto; padding: 8px 20px 48px; outline: none; 
 .filters input:checked + span { background: var(--ink); color: var(--card); border-color: var(--ink); }
 .filters input:focus-visible + span { outline: 3px solid var(--ink); outline-offset: 2px; }
 .count-line { color: var(--ink-2); font-size: 14px; margin: 0 0 8px; }
-.wlist { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); overflow: hidden; }
+.wlist { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-card); }
 .wlist > li + li { border-top: 1px solid var(--line); }
 .wrow { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 12px; padding: 10px 12px 10px 14px; }
 .wrow .num { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -377,6 +377,17 @@ main { max-width: 980px; margin: 0 auto; padding: 8px 20px 48px; outline: none; 
 .fineprint { color: var(--ink-2); font-size: 14px; max-width: 62ch; }
 .voice-help { margin: 0 0 14px; padding-left: 20px; font-size: 15px; max-width: 62ch; }
 .voice-help li { margin: 0 0 6px; }
+
+/* ---------- word glosses in examples ---------- */
+.w {
+  border-radius: 4px; cursor: help; padding: 0 1px; margin: 0 -1px;
+  text-decoration: underline dotted 1px; text-decoration-color: color-mix(in srgb, var(--ink-3) 60%, transparent); text-underline-offset: 5px;
+}
+.w:hover, .w.on { background: color-mix(in srgb, var(--ink) 9%, transparent); text-decoration-color: var(--ink-2); }
+.tip {
+  position: fixed; z-index: 80; max-width: min(260px, calc(100vw - 16px)); pointer-events: none;
+  background: var(--ink); color: var(--card); font: 400 15px/1.35 var(--sans); padding: 6px 10px; border-radius: 9px;
+}
 
 /* ---------- toast ---------- */
 .toast {
