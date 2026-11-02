@@ -1,6 +1,6 @@
 // Offline support. Serves from cache, then refreshes the cache in the background,
 // so a new deploy shows up on the next visit. Bump VERSION to force a clean cache.
-const VERSION = 'tingshuo-v3';
+const VERSION = 'tingshuo-v4';
 const ASSETS = [
   './',
   './index.html',

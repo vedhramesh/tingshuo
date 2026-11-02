@@ -485,19 +485,48 @@
     }
   }
 
-  const sess = { cur: null, mode: null, side: 'front', hint: false, n: 0, last: null, ahead: false, waitT: null };
+  const sess = { cur: null, mode: null, side: 'front', hint: false, n: 0, last: null, ahead: false, waitT: null,
+    retry: [], filler: false, isRetry: false, dk: false };
+
+  // Words you missed this session come back after a few cards until you get them right.
+  // While the loop has words in it, roughly every other card is a quick check of a word you already know.
+  function addRetry(i) {
+    sess.retry = sess.retry.filter((r) => r.i !== i);
+    sess.retry.push({ i, after: sess.n + 4 + Math.floor(Math.random() * 3) }); // 3 to 5 cards in between
+  }
+  function knownPool(skip) {
+    const out = [], today = dayNum();
+    for (const [k, c] of Object.entries(S.cards)) {
+      const i = +k;
+      if (c.st === 2 && c.dd > today && !skip.has(i) && i !== sess.last && i !== sess.cur) out.push(i);
+    }
+    return out;
+  }
+  const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
   function pickNext(now) {
     const q = queues(now);
+    const inLoop = new Set(sess.retry.map((r) => r.i));
     const avoid = (list) => (list.length > 1 && list[0] === sess.last ? list[1] : list[0]);
-    if (q.learnDue.length) return { i: avoid(q.learnDue), q };
+    const ready = sess.retry.filter((r) => r.after <= sess.n && r.i !== sess.last);
+    if (ready.length) return { i: ready[0].i, q, retry: true };
+    const known = sess.retry.length ? knownPool(inLoop) : [];
+    if (known.length && sess.n % 2 === 1) return { i: pickRandom(known), q, filler: true };
+    const learnDue = q.learnDue.filter((i) => !inLoop.has(i));
+    const learn = q.learn.filter((i) => !inLoop.has(i));
+    if (learnDue.length) return { i: avoid(learnDue), q };
     const hasRev = q.review.length, hasNew = q.fresh.length;
     if (hasRev || hasNew) {
       const takeNew = hasNew && (!hasRev || sess.n % 4 === 3);
       return { i: takeNew ? q.fresh[0] : avoid(q.review), isNew: takeNew, q };
     }
-    if (q.learn.length && (sess.ahead || S.cards[q.learn[0]].due <= now + AHEAD)) return { i: avoid(q.learn), q };
-    if (q.learn.length) return { wait: S.cards[q.learn[0]].due - now, q };
+    if (learn.length && (sess.ahead || S.cards[learn[0]].due <= now + AHEAD)) return { i: avoid(learn), q };
+    if (sess.retry.length) {
+      if (known.length) return { i: pickRandom(known), q, filler: true };
+      const r = sess.retry.find((x) => x.i !== sess.last) || sess.retry[0];
+      return { i: r.i, q, retry: true };
+    }
+    if (learn.length) return { wait: S.cards[learn[0]].due - now, q };
     return { done: true, q };
   }
 
@@ -516,11 +545,13 @@
   }
 
   function countsHTML(q, kind) {
-    const learnN = q.learn.length;
+    const looped = new Set(sess.retry.map((r) => r.i));
+    const learnN = q.learn.filter((i) => !looped.has(i)).length;
     return `<div class="counts" aria-label="Cards left">
       <span class="${kind === 'new' ? 'now' : ''}"><b>${q.fresh.length}</b> new</span>
       <span class="${kind === 'learn' ? 'now' : ''}"><b>${learnN}</b> learning</span>
       <span class="${kind === 'review' ? 'now' : ''}"><b>${q.review.length}</b> to review</span>
+      ${sess.retry.length ? `<span class="${kind === 'retry' ? 'now' : ''}"><b>${sess.retry.length}</b> to retry</span>` : ''}
     </div>`;
   }
 
@@ -534,6 +565,7 @@
       if (nx.done) return renderDone(root, nx.q);
       if (nx.wait != null) return renderWait(root, nx.q, nx.wait);
       sess.cur = nx.i;
+      sess.filler = !!nx.filler; sess.isRetry = !!nx.retry; sess.dk = false;
       sess.mode = S.cards[nx.i] ? directionFor(nx.i) : 'intro';
       sess.side = sess.mode === 'intro' ? 'back' : 'front';
       sess.hint = false;
@@ -541,7 +573,7 @@
     }
     const i = sess.cur, w = W[i], c = S.cards[i];
     const q = queues(now);
-    const kind = !c ? 'new' : c.st === 2 ? 'review' : 'learn';
+    const kind = sess.isRetry ? 'retry' : sess.filler ? '' : !c ? 'new' : c.st === 2 ? 'review' : 'learn';
     const remaining = q.fresh.length + q.learn.length + q.review.length;
     const depth = remaining > 15 ? 2 : remaining > 1 ? 1 : 0;
     const silent = noVoice();
@@ -556,8 +588,8 @@
           <div class="hint-area">${showPy ? staffHTML(w[P]) : ''}</div>
           ${showPy ? '' : '<button class="link-btn" data-act="hint">Show pinyin</button>'}
         </div>`;
-      actions = '<div class="row"><button class="btn primary" data-act="flip">Show answer</button></div>';
-      keys = 'Space shows the answer. R replays.';
+      actions = '<div class="row"><button class="btn quiet" data-act="dk">Don’t know</button><button class="btn primary" data-act="flip">Show answer</button></div>';
+      keys = 'Space shows the answer. D for don’t know. R replays.';
     } else if (sess.side === 'front' && sess.mode === 'say') {
       body = `<p class="card-ask">Say it out loud in Mandarin.</p>
         <div class="card-front">
@@ -565,11 +597,12 @@
           <div class="hint-area">${sess.hint ? staffHTML(w[P], '', true) : ''}</div>
           ${sess.hint ? '' : '<button class="link-btn" data-act="hint">Show the tones</button>'}
         </div>`;
-      actions = '<div class="row"><button class="btn primary" data-act="flip">Show answer</button></div>';
-      keys = 'Space shows the answer. H shows the tones.';
+      actions = '<div class="row"><button class="btn quiet" data-act="dk">Don’t know</button><button class="btn primary" data-act="flip">Show answer</button></div>';
+      keys = 'Space shows the answer. D for don’t know. H shows the tones.';
     } else {
       const sandhi = S.settings.contours && hasSandhi(w[P]) ? '<p class="sandhi">Two 3rd tones in a row: the first one is said as a 2nd tone.</p>' : '';
-      body = `${sess.mode === 'intro' ? '<p class="card-ask">New word</p>' : ''}
+      const tag = sess.mode === 'intro' ? 'New word' : sess.dk ? 'Here it is. It’ll come back in a few cards.' : '';
+      body = `${tag ? `<p class="card-ask">${tag}</p>` : ''}
         <div class="spec">
           <div class="spec-row">${staffHTML(w[P], 'head')}<button class="play" data-act="play-word" aria-label="Play ${esc(plain(w[P]))}">${ICON_PLAY}</button></div>
           ${sandhi}
@@ -583,15 +616,19 @@
           </div>
           ${w[NOTE] ? `<p class="note">${rich(w[NOTE])}</p>` : ''}
         </div>
-        <div class="card-foot"><span>Word ${i + 1} of ${N}</span><span>${!c ? 'First time' : c.reps ? `Reviewed ${c.reps === 1 ? 'once' : c.reps + ' times'}` : 'Just learned'}</span></div>`;
-      if (sess.mode === 'intro') {
+        <div class="card-foot"><span>Word ${i + 1} of ${N}</span><span>${sess.filler ? 'Quick check: a word you know' : sess.isRetry ? 'Back for another try' : !c ? 'First time' : c.reps ? `Reviewed ${c.reps === 1 ? 'once' : c.reps + ' times'}` : 'Just learned'}</span></div>`;
+      if (sess.dk) {
+        actions = `<div class="row"><button class="btn primary" data-act="cont">Continue</button></div>`;
+        keys = 'Space continues. R replays, E plays the example.';
+      } else if (sess.mode === 'intro') {
         actions = `<div class="row"><button class="btn quiet" data-act="know">I already know it</button><button class="btn primary" data-act="intro">Got it</button></div>`;
         keys = 'Space for Got it. K if you already know it. R replays.';
       } else {
         const labels = ['Again', 'Hard', 'Good', 'Easy'];
         actions = `<div class="grades">${labels.map((l, g) => {
           const nx = schedule(c, g + 1, now, true);
-          return `<button class="grade${g === 2 ? ' good' : ''}" data-act="grade" data-g="${g + 1}"><b>${l}</b><span>${fmtIvl(c, nx, now)}</span></button>`;
+          const sub = sess.filler ? (g === 0 ? 'retry' : 'no change') : fmtIvl(c, nx, now);
+          return `<button class="grade${g === 2 ? ' good' : ''}" data-act="grade" data-g="${g + 1}"><b>${l}</b><span>${sub}</span></button>`;
         }).join('')}</div>`;
         keys = '1 to 4 grades. Space is Good. R replays, E plays the example.';
       }
@@ -602,7 +639,7 @@
       <div class="actions">${actions}<p class="keys">${keys}</p></div>`;
     drawAll(root);
     fitHead(root);
-    const focusEl = $('[data-act="flip"], .grade.good, [data-act="intro"]', root);
+    const focusEl = $('[data-act="flip"], .grade.good, [data-act="intro"], [data-act="cont"]', root);
     if (focusEl && current === 'study' && kbd) focusEl.focus({ preventScroll: true });
     if (fresh && S.settings.autoplay && !silent && current === 'study') {
       if (sess.side === 'back') say(w[H], $('[data-act="play-word"]', root), $('.staff.head', root));
@@ -639,13 +676,39 @@
   }
 
   function grade(g) {
-    if (sess.side !== 'back' || sess.mode === 'intro') return;
+    if (sess.side !== 'back' || sess.mode === 'intro' || sess.dk) return;
     const i = sess.cur, now = Date.now();
-    const c = schedule(S.cards[i], g, now);
+    // Quick checks of known words only count if you miss them.
+    if (!sess.filler || g === 1) {
+      const c = schedule(S.cards[i], g, now);
+      c.ld = sess.mode;
+      S.cards[i] = c;
+      logIt('r'); save();
+    }
+    if (g === 1) addRetry(i);
+    else sess.retry = sess.retry.filter((r) => r.i !== i);
+    sess.last = i; sess.n++;
+    nextCard();
+  }
+
+  function dontKnow() {
+    if (sess.side !== 'front' || sess.mode === 'intro') return;
+    const i = sess.cur, now = Date.now();
+    const c = schedule(S.cards[i], 1, now);
     c.ld = sess.mode;
     S.cards[i] = c;
     logIt('r'); save();
-    sess.last = i; sess.n++;
+    addRetry(i);
+    sess.dk = true;
+    sess.side = 'back';
+    renderStudy();
+    const root = $('#view-study');
+    if (S.settings.autoplay && !noVoice()) say(W[i][H], $('[data-act="play-word"]', root), $('.staff.head', root));
+  }
+
+  function continueOn() {
+    if (!sess.dk) return;
+    sess.last = sess.cur; sess.n++;
     nextCard();
   }
 
@@ -815,7 +878,7 @@
       <section class="group" aria-labelledby="s-about">
         <h2 id="s-about">About the word list</h2>
         <p>The 1000 words come from SUBTLEX-CH, a frequency count of 33.5 million words of Mandarin film and TV subtitles (Cai &amp; Brysbaert, 2010), which tracks everyday speech better than counts based on books or news. Because subtitles skew toward crime dramas, words like “corpse” and “vampire” were cut, along with name fragments and slurs, and a few essentials subtitles undercount (numbers, “hello,” “how much is it”) were added. Pinyin, glosses and examples were written for this app and checked against a pinyin dictionary.</p>
-        <p class="fineprint">Hover over (or tap) a word in an example sentence to see what it means. Keyboard: Space flips and grades Good, 1 to 4 grade, R replays the word, E plays the example, H shows a hint. Fonts: Gentium Book Plus and Andika by SIL International, under the SIL Open Font License.</p>
+        <p class="fineprint">Hover over (or tap) a word in an example sentence to see what it means. Keyboard: Space flips and grades Good, D is don’t know, 1 to 4 grade, R replays the word, E plays the example, H shows a hint. Fonts: Gentium Book Plus and Andika by SIL International, under the SIL Open Font License.</p>
       </section>`;
     drawAll($('#view-settings'));
   }
@@ -847,7 +910,7 @@
         if (!d || typeof d !== 'object' || typeof d.cards !== 'object') throw new Error('shape');
         S = normalize(d);
         save(); applyDisplay(); TTS.pick();
-        sess.cur = null; wordsBuilt = false;
+        sess.cur = null; sess.retry = []; wordsBuilt = false;
         toast(`Progress imported: ${plural(Object.keys(S.cards).length, 'word')}.`);
         renderSettings();
       } catch (e) {
@@ -866,7 +929,7 @@
     clearTimeout(resetArmed); resetArmed = null;
     S = normalize({ settings: S.settings });
     save();
-    sess.cur = null; peekIdx = null;
+    sess.cur = null; sess.retry = []; peekIdx = null;
     toast('Progress reset. Back to word one.');
     renderSettings();
   }
@@ -892,6 +955,8 @@
     switch (act) {
       case 'flip': flip(); break;
       case 'grade': grade(+el.dataset.g); break;
+      case 'dk': dontKnow(); break;
+      case 'cont': continueOn(); break;
       case 'intro': introduce(false); break;
       case 'know': introduce(true); break;
       case 'hint': sess.hint = true; renderStudy(); break;
@@ -936,6 +1001,7 @@
     if ((k === ' ' || k === 'enter') && !onControl) {
       e.preventDefault();
       if (sess.side === 'front') flip();
+      else if (sess.dk) continueOn();
       else if (sess.mode === 'intro') introduce(false);
       else grade(3);
     } else if (/^[1-4]$/.test(k) && sess.side === 'back') grade(+k);
@@ -943,6 +1009,7 @@
     else if (k === 'e' && sess.cur != null && sess.side === 'back') say(W[sess.cur][XH], $('[data-act="play-ex"]', root), null, (+S.settings.rate || 0.9) * 0.95);
     else if (k === 'h' && sess.side === 'front' && !sess.hint) { sess.hint = true; renderStudy(); }
     else if (k === 'k' && sess.mode === 'intro') introduce(true);
+    else if (k === 'd' && sess.side === 'front') dontKnow();
   });
 
   let rz;
